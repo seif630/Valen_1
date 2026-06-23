@@ -1,14 +1,17 @@
+# Next.js on Netlify (app lives in this folder)
+# publish must differ from the base directory — plugin requires .next output
+
 [build]
   command = "npm run build:netlify"
+  publish = ".next"
 
 [build.environment]
-  NODE_VERSION = "20"
+  NODE_VERSION = "22"
   NETLIFY = "true"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
-# Allow larger uploads for product images/videos (admin panel)
 [functions]
   node_bundler = "esbuild"
 

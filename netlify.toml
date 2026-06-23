@@ -1,10 +1,11 @@
-# Deploy the Next.js app from the angels/ subdirectory
+# Monorepo: site source is in angels/
 [build]
   base = "angels"
   command = "npm run build:netlify"
+  publish = ".next"
 
 [build.environment]
-  NODE_VERSION = "20"
+  NODE_VERSION = "22"
   NETLIFY = "true"
 
 [[plugins]]

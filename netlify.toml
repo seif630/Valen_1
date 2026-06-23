@@ -1,0 +1,16 @@
+# Deploy the Next.js app from the angels/ subdirectory
+[build]
+  base = "angels"
+  command = "npm run build:netlify"
+
+[build.environment]
+  NODE_VERSION = "20"
+  NETLIFY = "true"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+[[headers]]
+  for = "/api/media/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

@@ -1,0 +1,18 @@
+[build]
+  command = "npm run build:netlify"
+
+[build.environment]
+  NODE_VERSION = "20"
+  NETLIFY = "true"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Allow larger uploads for product images/videos (admin panel)
+[functions]
+  node_bundler = "esbuild"
+
+[[headers]]
+  for = "/api/media/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

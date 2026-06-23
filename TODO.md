@@ -1,0 +1,3 @@
+- [x] Remove Address section (📍 123 Fashion Street New York, NY 10001) from Contact Us page
+- [x] Remove Phone section (📞 (555) 123-4567) from Contact Us page
+- [x] Update Email to angelswear10@gmail.com in Contact Us page

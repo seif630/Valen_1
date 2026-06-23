@@ -1,0 +1,1565 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { signIn, signOut, useSession } from 'next-auth/react';
+import Image from 'next/image';
+
+interface ProductForm {
+  name: string;
+  description: string;
+  price: string;
+  category_id: string;
+  stock_quantity: string;
+  sizes: string;
+  is_on_sale: boolean;
+  sale_price: string;
+  sale_percentage: string;
+  sale_start_date: string;
+  sale_end_date: string;
+  video_url: string;
+}
+
+interface DashboardData {
+  totalSales: number;
+  totalOrders: number;
+  orderStats: {
+    pending: number;
+    processing: number;
+    shipped: number;
+    delivered: number;
+  };
+  revenue: {
+    monthly: number;
+    weekly: number;
+    daily: number;
+  };
+  topProducts: Array<{
+    name: string;
+    image_url: string | null;
+    total_sold: number;
+    total_revenue: number;
+  }>;
+  recentActivities: Array<{
+    id: number;
+    total_amount: number;
+    status: string;
+    created_at: string;
+    customer_name: string;
+    customer_email: string;
+  }>;
+}
+
+interface Order {
+  id: number;
+  total_amount: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  customer_name: string;
+  customer_email: string;
+  customer_phone: string;
+  items: string;
+  shipping_address: string;
+}
+
+interface Product {
+  id: number;
+  name: string;
+  description: string;
+  price: number;
+  sale_price?: number;
+  is_on_sale?: boolean;
+  sale_percentage?: number;
+  sale_start_date?: string;
+  sale_end_date?: string;
+  category_id: number;
+  image_url: string | null;
+  images: string[];
+  stock_quantity: number;
+  sizes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ContactMessage {
+  id: number;
+  name: string;
+  email: string;
+  subject: string;
+  message: string;
+  created_at: string;
+}
+
+export default function Admin() {
+  const { data: session, status } = useSession();
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+  const [loginError, setLoginError] = useState('');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'orders' | 'products' | 'contact-messages'>('dashboard');
+
+  // Dashboard state
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [loadingDashboard, setLoadingDashboard] = useState(false);
+
+  // Orders state
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [sentEmails, setSentEmails] = useState<Set<number>>(new Set());
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [showOrderDetails, setShowOrderDetails] = useState(false);
+
+  // Products state
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [uploadedUrls, setUploadedUrls] = useState<string[]>([]);
+  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
+  const [mainPhoto, setMainPhoto] = useState<string>('');  // New state for main photo
+  const [showProductForm, setShowProductForm] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [productForm, setProductForm] = useState<ProductForm>({
+    name: '',
+    description: '',
+    price: '',
+    category_id: '1',
+    stock_quantity: '',
+    sizes: '["S","M","L","XL"]',
+    is_on_sale: false,
+    sale_price: '',
+    sale_percentage: '',
+    sale_start_date: '',
+    sale_end_date: '',
+    video_url: ''
+  });
+  const [creatingProduct, setCreatingProduct] = useState(false);
+
+  // Video upload state
+  const [selectedVideoFiles, setSelectedVideoFiles] = useState<File[]>([]);
+  const [uploadingVideos, setUploadingVideos] = useState(false);
+  const [uploadedVideoUrls, setUploadedVideoUrls] = useState<string[]>([]);
+  const [videoPreviewUrls, setVideoPreviewUrls] = useState<string[]>([]);
+
+  // Contact messages state
+  const [contactMessages, setContactMessages] = useState<ContactMessage[]>([]);
+  const [loadingContactMessages, setLoadingContactMessages] = useState(false);
+  const [selectedContactMessage, setSelectedContactMessage] = useState<ContactMessage | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Helper function to format dates
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // Load data when tab changes
+  useEffect(() => {
+    if (activeTab === 'dashboard' && !dashboardData) {
+      loadDashboardData();
+    } else if (activeTab === 'orders' && orders.length === 0) {
+      loadOrders();
+    } else if (activeTab === 'products' && products.length === 0) {
+      loadProducts();
+    } else if (activeTab === 'contact-messages' && contactMessages.length === 0) {
+      loadContactMessages();
+    }
+  }, [activeTab]);
+
+  // Load videos when editing a product
+  useEffect(() => {
+    if (editingProduct) {
+      loadProductVideos(editingProduct.id);
+    }
+  }, [editingProduct]);
+
+  // Function to load product videos for editing
+  const loadProductVideos = async (productId: number) => {
+    try {
+      const response = await fetch(`/api/products/${productId}/videos`);
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          setUploadedVideoUrls(data);
+        } else {
+          console.error('Invalid video URLs data:', data);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading product videos:', error);
+    }
+  };
+
+  const loadDashboardData = async () => {
+    setLoadingDashboard(true);
+    try {
+      const response = await fetch('/api/admin/dashboard');
+      if (response.ok) {
+        const data = await response.json();
+        setDashboardData(data);
+      }
+    } catch (error) {
+      console.error('Error loading dashboard data:', error);
+    } finally {
+      setLoadingDashboard(false);
+    }
+  };
+
+  const loadOrders = async () => {
+    setLoadingOrders(true);
+    try {
+      const response = await fetch('/api/orders');
+      if (response.ok) {
+        const data = await response.json();
+        setOrders(data);
+      }
+    } catch (error) {
+      console.error('Error loading orders:', error);
+    } finally {
+      setLoadingOrders(false);
+    }
+  };
+
+  const loadProducts = async () => {
+    setLoadingProducts(true);
+    try {
+      const response = await fetch('/api/products');
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          setProducts(data);
+        } else {
+          console.error('Invalid products data:', data);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading products:', error);
+    } finally {
+      setLoadingProducts(false);
+    }
+  };
+
+  const loadContactMessages = async () => {
+    setLoadingContactMessages(true);
+    try {
+      const response = await fetch('/api/admin/contact-messages');
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          setContactMessages(data);
+        } else if (data.messages && Array.isArray(data.messages)) {
+          setContactMessages(data.messages);
+        } else {
+          console.error('Invalid contact messages data:', data);
+          setContactMessages([]);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading contact messages:', error);
+      setContactMessages([]);
+    } finally {
+      setLoadingContactMessages(false);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const result = await signIn('credentials', {
+        username: loginForm.username,
+        password: loginForm.password,
+        redirect: false,
+      });
+      if (result?.error) {
+        setLoginError('Invalid username or password');
+      } else {
+        setLoginError('');
+      }
+    } catch (error) {
+      setLoginError('Login failed');
+    }
+  };
+
+  const handleLogout = () => {
+    signOut();
+    setLoginForm({ username: '', password: '' });
+    setLoginError('');
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const filesArray = Array.from(e.target.files);
+      setSelectedFiles(filesArray);
+
+      // Create preview URLs
+      const urls = filesArray.map(file => URL.createObjectURL(file));
+      setPreviewUrls(urls);
+    }
+  };
+
+  const handleVideoFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const filesArray = Array.from(e.target.files);
+      setSelectedVideoFiles(filesArray);
+
+      // Create preview URLs for videos
+      const urls = filesArray.map(file => URL.createObjectURL(file));
+      setVideoPreviewUrls(urls);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (selectedFiles.length === 0) {
+      setMessage('Please select files first');
+      return;
+    }
+
+    setUploading(true);
+    setMessage('');
+
+    try {
+      const uploadedUrlsTemp: string[] = [];
+      for (const file of selectedFiles) {
+        const formData = new FormData();
+        formData.append('image', file);
+
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          uploadedUrlsTemp.push(data.url);
+        } else {
+          setMessage('Upload failed for one or more files');
+          setUploading(false);
+          return;
+        }
+      }
+      setUploadedUrls(uploadedUrlsTemp);
+      setMessage(`Uploaded ${uploadedUrlsTemp.length} images successfully!`);
+      setSelectedFiles([]);
+      setPreviewUrls([]);
+    } catch (error) {
+      setMessage('Upload error');
+      console.error('Upload error:', error);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleUploadVideos = async () => {
+    if (selectedVideoFiles.length === 0) {
+      setMessage('Please select video files first');
+      return;
+    }
+
+    setUploadingVideos(true);
+    setMessage('');
+
+    try {
+      const uploadedVideoUrlsTemp: string[] = [];
+      for (const file of selectedVideoFiles) {
+        const formData = new FormData();
+        formData.append('video', file);
+
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          uploadedVideoUrlsTemp.push(data.url);
+        } else {
+          setMessage('Video upload failed for one or more files');
+          setUploadingVideos(false);
+          return;
+        }
+      }
+      setUploadedVideoUrls(uploadedVideoUrlsTemp);
+      setMessage(`Uploaded ${uploadedVideoUrlsTemp.length} videos successfully!`);
+      setSelectedVideoFiles([]);
+      setVideoPreviewUrls([]);
+    } catch (error) {
+      setMessage('Video upload error');
+      console.error('Video upload error:', error);
+    } finally {
+      setUploadingVideos(false);
+    }
+  };
+
+  const handleCreateProduct = async () => {
+    if (uploadedUrls.length === 0) {
+      setMessage('Please upload an image first');
+      return;
+    }
+
+    if (!productForm.name || !productForm.price || !productForm.stock_quantity) {
+      setMessage('Please fill in all required fields');
+      return;
+    }
+
+    setCreatingProduct(true);
+    setMessage('');
+
+    try {
+      const productData = {
+        ...productForm,
+        price: parseFloat(productForm.price),
+        category_id: parseInt(productForm.category_id),
+        stock_quantity: parseInt(productForm.stock_quantity),
+        image_urls: uploadedUrls,
+        video_urls: uploadedVideoUrls,
+        sizes: JSON.parse(productForm.sizes),
+        is_on_sale: productForm.is_on_sale,
+        sale_price: productForm.sale_price ? parseFloat(productForm.sale_price) : null,
+        sale_percentage: productForm.sale_percentage ? parseFloat(productForm.sale_percentage) : null,
+        sale_start_date: productForm.sale_start_date || null,
+        sale_end_date: productForm.sale_end_date || null
+      };
+
+      const response = await fetch('/api/products', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(productData),
+      });
+
+      if (response.ok) {
+        setMessage('Product created successfully!');
+        setProductForm({
+          name: '',
+          description: '',
+          price: '',
+          category_id: '1',
+          stock_quantity: '',
+          sizes: '["S","M","L","XL"]',
+          is_on_sale: false,
+          sale_price: '',
+          sale_percentage: '',
+          sale_start_date: '',
+          sale_end_date: '',
+          video_url: ''
+        });
+        setUploadedUrls([]);
+        setUploadedVideoUrls([]);
+        setShowProductForm(false);
+      } else {
+        setMessage('Failed to create product');
+      }
+    } catch (error) {
+      setMessage('Error creating product');
+      console.error('Create product error:', error);
+    } finally {
+      setCreatingProduct(false);
+    }
+  };
+
+  if (!session || session.user?.role !== 'admin') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="max-w-md w-full bg-white p-8 rounded-lg shadow-md">
+          <h1 className="text-2xl font-bold text-center mb-6">Admin Login</h1>
+          {session && session.user?.role !== 'admin' && (
+            <p className="text-sm text-amber-700 bg-amber-50 p-3 rounded mb-4">
+              You are signed in as a customer. Please use admin credentials to access this panel.
+            </p>
+          )}
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Username
+              </label>
+              <input
+                type="text"
+                value={loginForm.username}
+                onChange={(e) => setLoginForm({...loginForm, username: e.target.value})}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                placeholder="Enter username"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Password
+              </label>
+              <input
+                type="password"
+                value={loginForm.password}
+                onChange={(e) => setLoginForm({...loginForm, password: e.target.value})}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                placeholder="Enter password"
+                required
+              />
+            </div>
+
+            {loginError && (
+              <div className="text-red-600 text-sm text-center">
+                {loginError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="w-full bg-purple-600 text-white py-2 px-4 rounded-lg font-semibold hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-600"
+            >
+              Login
+            </button>
+          </form>
+
+
+        </div>
+      </div>
+    );
+  }
+
+  const updateOrderStatus = async (orderId: number, newStatus: string) => {
+    try {
+      const response = await fetch(`/api/orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      if (response.ok) {
+        // Reload orders to reflect changes
+        loadOrders();
+        // Also reload dashboard data if dashboard tab is active
+        if (activeTab === 'dashboard') {
+          loadDashboardData();
+        }
+      }
+    } catch (error) {
+      console.error('Error updating order status:', error);
+    }
+  };
+
+  const sendConfirmationEmail = async (orderId: number) => {
+    try {
+      const response = await fetch('/api/send-confirmation-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_id: orderId }),
+      });
+      if (response.ok) {
+        setSentEmails(prev => new Set([...prev, orderId]));
+        alert('Confirmation email sent successfully!');
+      } else {
+        alert('Failed to send confirmation email');
+      }
+    } catch (error) {
+      console.error('Error sending confirmation email:', error);
+      alert('Error sending confirmation email');
+    }
+  };
+
+  const deleteProduct = async (productId: number) => {
+    if (!confirm('Are you sure you want to delete this product?')) return;
+
+    try {
+      const response = await fetch(`/api/products/${productId}`, {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        // Reload products to reflect changes
+        loadProducts();
+      }
+    } catch (error) {
+      console.error('Error deleting product:', error);
+    }
+  };
+
+  const deleteOrder = async (orderId: number) => {
+    if (!confirm('Are you sure you want to delete this order? This action cannot be undone.')) return;
+
+    try {
+      const response = await fetch(`/api/orders?id=${orderId}`, {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        // Reload orders to reflect changes
+        loadOrders();
+        // Also reload dashboard data if dashboard tab is active
+        if (activeTab === 'dashboard') {
+          loadDashboardData();
+        }
+        alert('Order deleted successfully!');
+      } else {
+        alert('Failed to delete order');
+      }
+    } catch (error) {
+      console.error('Error deleting order:', error);
+      alert('Error deleting order');
+    }
+  };
+
+  const editProduct = (product: Product) => {
+    setEditingProduct(product);
+    setProductForm({
+      name: product.name,
+      description: product.description || '',
+      price: product.price.toString(),
+      category_id: product.category_id.toString(),
+      stock_quantity: product.stock_quantity.toString(),
+      sizes: product.sizes,
+      is_on_sale: product.is_on_sale || false,
+      sale_price: product.sale_price?.toString() || '',
+      sale_percentage: product.sale_percentage?.toString() || '',
+      sale_start_date: product.sale_start_date || '',
+      sale_end_date: product.sale_end_date || '',
+      video_url: ''
+    });
+    // Combine main image with additional images
+    const allImages = [];
+    if (product.image_url) {
+      allImages.push(product.image_url);
+    }
+    if (product.images && product.images.length > 0) {
+      allImages.push(...product.images);
+    }
+    setUploadedUrls(allImages);
+    setShowProductForm(true);
+    setActiveTab('products');
+  };
+
+  const handleUpdateProduct = async () => {
+    if (!editingProduct || uploadedUrls.length === 0) return;
+
+    try {
+      const productData = {
+        ...productForm,
+        price: parseFloat(productForm.price),
+        category_id: parseInt(productForm.category_id),
+        stock_quantity: parseInt(productForm.stock_quantity),
+        image_urls: uploadedUrls,
+        sizes: JSON.parse(productForm.sizes),
+        is_on_sale: productForm.is_on_sale,
+        sale_price: productForm.sale_price ? parseFloat(productForm.sale_price) : null,
+        sale_percentage: productForm.sale_percentage ? parseFloat(productForm.sale_percentage) : null,
+        sale_start_date: productForm.sale_start_date || null,
+        sale_end_date: productForm.sale_end_date || null
+      };
+
+      const response = await fetch(`/api/products/${editingProduct.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(productData),
+      });
+
+      if (response.ok) {
+        setMessage('Product updated successfully!');
+        setEditingProduct(null);
+        setProductForm({
+          name: '',
+          description: '',
+          price: '',
+          category_id: '1',
+          stock_quantity: '',
+          sizes: '["S","M","L","XL"]',
+          is_on_sale: false,
+          sale_price: '',
+          sale_percentage: '',
+          sale_start_date: '',
+          sale_end_date: '',
+          video_url: ''
+        });
+        setUploadedUrls([]);
+        setShowProductForm(false);
+        loadProducts();
+      } else {
+        setMessage('Failed to update product');
+      }
+    } catch (error) {
+      setMessage('Error updating product');
+      console.error('Update product error:', error);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white shadow-sm border-b">
+        <div className="container mx-auto px-4 py-4">
+          <div className="flex justify-between items-center">
+            <h1 className="text-2xl font-bold text-gray-900">Admin Panel</h1>
+            <button
+              onClick={handleLogout}
+              className="bg-red-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-red-700"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Navigation Tabs */}
+      <div className="bg-white shadow-sm">
+        <div className="container mx-auto px-4">
+          <nav className="flex space-x-8">
+            {[
+              { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+              { id: 'orders', label: 'Orders', icon: '📦' },
+              { id: 'products', label: 'Products', icon: '🛍️' },
+              { id: 'contact-messages', label: 'Contact Messages', icon: '💬' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as typeof activeTab)}
+                className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === tab.id
+                    ? 'border-purple-600 text-purple-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                <span className="mr-2">{tab.icon}</span>
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="container mx-auto px-4 py-8">
+        {activeTab === 'dashboard' && (
+          <div className="space-y-6">
+            <h2 className="text-xl font-semibold">Dashboard Overview</h2>
+
+            {loadingDashboard ? (
+              <div className="text-center py-8">Loading dashboard data...</div>
+            ) : dashboardData ? (
+              <>
+                {/* Stats Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  <div className="bg-white p-6 rounded-lg shadow">
+                    <h3 className="text-sm font-medium text-gray-500">Total Sales</h3>
+                    <p className="text-2xl font-bold text-gray-900">EGP {dashboardData.totalSales.toFixed(2)}</p>
+                  </div>
+                  <div className="bg-white p-6 rounded-lg shadow">
+                    <h3 className="text-sm font-medium text-gray-500">Total Orders</h3>
+                    <p className="text-2xl font-bold text-gray-900">{dashboardData.totalOrders}</p>
+                  </div>
+                  <div className="bg-white p-6 rounded-lg shadow">
+                    <h3 className="text-sm font-medium text-gray-500">Monthly Revenue</h3>
+                    <p className="text-2xl font-bold text-gray-900">EGP {dashboardData.revenue.monthly.toFixed(2)}</p>
+                  </div>
+                  <div className="bg-white p-6 rounded-lg shadow">
+                    <h3 className="text-sm font-medium text-gray-500">Weekly Revenue</h3>
+                    <p className="text-2xl font-bold text-gray-900">EGP {dashboardData.revenue.weekly.toFixed(2)}</p>
+                  </div>
+                </div>
+
+                {/* Order Status */}
+                <div className="bg-white p-6 rounded-lg shadow">
+                  <h3 className="text-lg font-medium mb-4">Order Status</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="text-center">
+                      <p className="text-2xl font-bold text-yellow-600">{dashboardData.orderStats.pending}</p>
+                      <p className="text-sm text-gray-500">Pending</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-2xl font-bold text-blue-600">{dashboardData.orderStats.processing}</p>
+                      <p className="text-sm text-gray-500">Processing</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-2xl font-bold text-orange-600">{dashboardData.orderStats.shipped}</p>
+                      <p className="text-sm text-gray-500">Shipped</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-2xl font-bold text-green-600">{dashboardData.orderStats.delivered}</p>
+                      <p className="text-sm text-gray-500">Delivered</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Top Products */}
+                <div className="bg-white p-6 rounded-lg shadow">
+                  <h3 className="text-lg font-medium mb-4">Top Selling Products</h3>
+                  <div className="space-y-4">
+                    {dashboardData.topProducts.map((product, index) => (
+                      <div key={index} className="flex items-center space-x-4">
+                        {product.image_url && product.image_url.trim() !== '' ? (
+                          <Image
+                            src={product.image_url}
+                            alt={product.name}
+                            width={50}
+                            height={50}
+                            className="rounded"
+                          />
+                        ) : (
+                          <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center text-xs text-gray-500">
+                            No Image
+                          </div>
+                        )}
+                        <div className="flex-1">
+                          <p className="font-medium">{product.name}</p>
+                          <p className="text-sm text-gray-500">Sold: {product.total_sold}</p>
+                        </div>
+                        <p className="font-medium">EGP {product.total_revenue.toFixed(2)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Recent Activities */}
+                <div className="bg-white p-6 rounded-lg shadow">
+                  <h3 className="text-lg font-medium mb-4">Recent Activities</h3>
+                  <div className="space-y-3">
+                    {dashboardData.recentActivities.map((activity, index) => (
+                      <div key={index} className="flex justify-between items-center py-2 border-b border-gray-100">
+                        <div>
+                          <p className="font-medium">Order #{activity.id}</p>
+                          <p className="text-sm text-gray-500">{activity.customer_name}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-medium">EGP {activity.total_amount.toFixed(2)}</p>
+                          <span className={`px-2 py-1 text-xs rounded ${
+                            activity.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                            activity.status === 'processing' ? 'bg-blue-100 text-blue-800' :
+                            activity.status === 'shipped' ? 'bg-orange-100 text-orange-800' :
+                            'bg-green-100 text-green-800'
+                          }`}>
+                            {activity.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  onClick={() => loadDashboardData()}
+                  className="mt-4 bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700"
+                >
+                  Refresh Dashboard
+                </button>
+              </>
+            ) : (
+              <div className="text-center py-8">Failed to load dashboard data</div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'orders' && (
+          <div className="space-y-6">
+            <h2 className="text-xl font-semibold">Order Management</h2>
+
+            {loadingOrders ? (
+              <div className="text-center py-8">Loading orders...</div>
+            ) : (
+              <div className="bg-white rounded-lg shadow overflow-hidden">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order ID</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {orders.map((order) => (
+                      <tr key={order.id}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">#{order.id}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{order.customer_name}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">EGP {order.total_amount.toFixed(2)}</td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`px-2 py-1 text-xs rounded ${
+                            order.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                            order.status === 'processing' ? 'bg-blue-100 text-blue-800' :
+                            order.status === 'shipped' ? 'bg-orange-100 text-orange-800' :
+                            order.status === 'delivered' ? 'bg-green-100 text-green-800' :
+                            'bg-red-100 text-red-800'
+                          }`}>
+                            {order.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {new Date(order.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                          <button
+                            onClick={() => {
+                              setSelectedOrder(order);
+                              setShowOrderDetails(true);
+                            }}
+                            className="text-blue-600 hover:text-blue-900 mr-2"
+                          >
+                            View Details
+                          </button>
+                          <select
+                            value={order.status}
+                            onChange={(e) => updateOrderStatus(order.id, e.target.value)}
+                            className="border border-gray-300 rounded px-2 py-1 text-sm"
+                          >
+                            <option value="pending">Pending</option>
+                            <option value="processing">Processing</option>
+                            <option value="shipped">Shipped</option>
+                            <option value="delivered">Delivered</option>
+                            <option value="canceled">Canceled</option>
+                          </select>
+                          <button
+                            onClick={() => sendConfirmationEmail(order.id)}
+                            className={`px-2 py-1 rounded text-xs ${
+                              sentEmails.has(order.id)
+                                ? 'bg-gray-600 text-white cursor-not-allowed'
+                                : 'bg-green-600 text-white hover:bg-green-700'
+                            }`}
+                            disabled={sentEmails.has(order.id)}
+                          >
+                            {sentEmails.has(order.id) ? 'Sent' : 'Send Email'}
+                          </button>
+                          <button
+                            onClick={() => deleteOrder(order.id)}
+                            className="text-red-600 hover:text-red-900 ml-2"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Order Details Modal */}
+            {showOrderDetails && selectedOrder && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+                  <div className="p-6">
+                    <div className="flex justify-between items-center mb-6">
+                      <h3 className="text-xl font-semibold">Order Details - #{selectedOrder.id}</h3>
+                      <button
+                        onClick={() => {
+                          setShowOrderDetails(false);
+                          setSelectedOrder(null);
+                        }}
+                        className="text-gray-400 hover:text-gray-600"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Order Info */}
+                      <div className="space-y-4">
+                        <div>
+                          <h4 className="font-medium text-gray-900 mb-2">Order Information</h4>
+                          <div className="bg-gray-50 p-4 rounded space-y-2">
+                            <p><span className="font-medium">Order ID:</span> #{selectedOrder.id}</p>
+                            <p><span className="font-medium">Status:</span>
+                              <span className={`ml-2 px-2 py-1 text-xs rounded ${
+                                selectedOrder.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                                selectedOrder.status === 'processing' ? 'bg-blue-100 text-blue-800' :
+                                selectedOrder.status === 'shipped' ? 'bg-orange-100 text-orange-800' :
+                                selectedOrder.status === 'delivered' ? 'bg-green-100 text-green-800' :
+                                'bg-red-100 text-red-800'
+                              }`}>
+                                {selectedOrder.status}
+                              </span>
+                            </p>
+                            <p><span className="font-medium">Total Amount:</span> EGP {selectedOrder.total_amount.toFixed(2)}</p>
+                            <p><span className="font-medium">Order Date:</span> {new Date(selectedOrder.created_at).toLocaleString()}</p>
+                          </div>
+                        </div>
+
+                        {/* Customer Info */}
+                        <div>
+                          <h4 className="font-medium text-gray-900 mb-2">Customer Information</h4>
+                          <div className="bg-gray-50 p-4 rounded space-y-2">
+                            <p><span className="font-medium">Name:</span> {selectedOrder.customer_name}</p>
+                            <p><span className="font-medium">Email:</span> {selectedOrder.customer_email}</p>
+                            <p><span className="font-medium">Phone:</span> {selectedOrder.customer_phone}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Shipping & Items */}
+                      <div className="space-y-4">
+                        {/* Shipping Address */}
+                        <div>
+                          <h4 className="font-medium text-gray-900 mb-2">Shipping Address</h4>
+                          <div className="bg-gray-50 p-4 rounded">
+                            <p className="whitespace-pre-line">{selectedOrder.shipping_address}</p>
+                          </div>
+                        </div>
+
+                        {/* Order Items */}
+                        <div>
+                          <h4 className="font-medium text-gray-900 mb-2">Order Items</h4>
+                          <div className="bg-gray-50 p-4 rounded space-y-3">
+                            {(() => {
+                              try {
+                                const items = JSON.parse(selectedOrder.items);
+                                return items.map((item: any, index: number) => (
+                                  <div key={index} className="flex items-center space-x-3 border-b border-gray-200 pb-3 last:border-b-0 last:pb-0">
+                                    {item.image_url && item.image_url.trim() !== '' ? (
+                                      <Image
+                                        src={item.image_url}
+                                        alt={item.product_name}
+                                        width={50}
+                                        height={50}
+                                        className="rounded"
+                                      />
+                                    ) : (
+                                      <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center text-xs text-gray-500">
+                                        No Image
+                                      </div>
+                                    )}
+                                    <div className="flex-1">
+                                      <p className="font-medium">{item.product_name}</p>
+                                      <p className="text-sm text-gray-600">
+                                        Quantity: {item.quantity} | Size: {item.size} | Price: EGP {item.price.toFixed(2)}
+                                      </p>
+                                    </div>
+                                    <p className="font-medium">EGP {(item.quantity * item.price).toFixed(2)}</p>
+                                  </div>
+                                ));
+                              } catch (error) {
+                                return <p className="text-gray-500">Unable to load items</p>;
+                              }
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex justify-end space-x-3 mt-6 pt-4 border-t">
+                      <button
+                        onClick={() => window.print()}
+                        className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                      >
+                        Print Order
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowOrderDetails(false);
+                          setSelectedOrder(null);
+                        }}
+                        className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'contact-messages' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-semibold">Contact Messages</h2>
+              <button
+                onClick={() => {
+                  if (activeTab === 'contact-messages') {
+                    loadContactMessages();
+                  }
+                }}
+                className="bg-purple-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-purple-700"
+              >
+                Refresh Messages
+              </button>
+            </div>
+
+            {loadingContactMessages ? (
+              <div className="text-center py-8">Loading contact messages...</div>
+            ) : error ? (
+              <div className="text-center py-8 text-red-600">Error: {error}</div>
+            ) : (
+              <div className="bg-white rounded-lg shadow overflow-hidden">
+                <div className="p-6">
+                  <div className="mb-4">
+                    <p className="text-gray-600">Total messages: {contactMessages.length}</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Messages List */}
+                    <div className="space-y-4">
+                      {contactMessages.length === 0 ? (
+                        <div className="text-center py-8 text-gray-500">
+                          No contact messages yet.
+                        </div>
+                      ) : (
+                        contactMessages.map((message) => (
+                          <div
+                            key={message.id}
+                            className={`border rounded-lg p-4 cursor-pointer transition-colors ${
+                              selectedContactMessage?.id === message.id
+                                ? 'border-purple-500 bg-purple-50'
+                                : 'border-gray-200 hover:border-purple-300'
+                            }`}
+                            onClick={() => setSelectedContactMessage(message)}
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <h3 className="font-semibold text-lg">{message.subject}</h3>
+                              <span className="text-sm text-gray-500">
+                                {formatDate(message.created_at)}
+                              </span>
+                            </div>
+                            <p className="text-gray-600 mb-2">
+                              <strong>From:</strong> {message.name} ({message.email})
+                            </p>
+                            <p className="text-gray-700 line-clamp-2">
+                              {message.message}
+                            </p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Message Details */}
+                    <div>
+                      {selectedContactMessage ? (
+                        <div className="border border-gray-200 rounded-lg p-6">
+                          <h2 className="text-2xl font-bold mb-4">{selectedContactMessage.subject}</h2>
+                          <div className="space-y-3 mb-6">
+                            <p><strong>Name:</strong> {selectedContactMessage.name}</p>
+                            <p><strong>Email:</strong> {selectedContactMessage.email}</p>
+                            <p><strong>Date:</strong> {formatDate(selectedContactMessage.created_at)}</p>
+                          </div>
+                          <div className="border-t pt-4">
+                            <h3 className="font-semibold mb-2">Message:</h3>
+                            <div className="bg-gray-50 p-4 rounded-lg whitespace-pre-wrap">
+                              {selectedContactMessage.message}
+                            </div>
+                          </div>
+                          <div className="mt-6 flex gap-2">
+                            <a
+                              href={`mailto:${selectedContactMessage.email}?subject=Re: ${selectedContactMessage.subject}`}
+                              className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700"
+                            >
+                              Reply via Email
+                            </a>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="border border-gray-200 rounded-lg p-6 text-center text-gray-500">
+                          Select a message to view details
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'products' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-semibold">Product Management</h2>
+              <button
+                onClick={() => {
+                  setEditingProduct(null);
+                  setShowProductForm(!showProductForm);
+                }}
+                className="bg-purple-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-purple-700"
+              >
+                {showProductForm ? 'Cancel' : 'Add Product'}
+              </button>
+            </div>
+
+            {showProductForm && (
+              <div className="bg-white p-6 rounded-lg shadow">
+                <h3 className="text-lg font-medium mb-4">
+                  {editingProduct ? 'Edit Product' : 'Add New Product'}
+                </h3>
+
+                {/* Image Upload Section */}
+                <div className="mb-6 p-4 bg-gray-50 rounded">
+                  <h4 className="font-medium mb-2">Product Image</h4>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Select Images (Multiple allowed)
+                      </label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        onChange={handleFileSelect}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                      />
+                    </div>
+
+                    {selectedFiles.length > 0 && (
+                      <div className="text-sm text-gray-600">
+                        Selected: {selectedFiles.length} file{selectedFiles.length > 1 ? 's' : ''} - {selectedFiles.map(f => f.name).join(', ')}
+                      </div>
+                    )}
+
+                    {previewUrls.length > 0 && (
+                      <div className="mt-4">
+                        <h5 className="text-sm font-medium text-gray-700 mb-2">Preview:</h5>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                          {previewUrls.map((url, index) => (
+                            <Image
+                              key={index}
+                              src={url}
+                              alt={`Preview ${index + 1}`}
+                              width={150}
+                              height={150}
+                              className="max-w-full h-32 object-contain border border-gray-300 rounded"
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleUpload}
+                      disabled={selectedFiles.length === 0 || uploading}
+                      className="bg-purple-600 text-white px-4 py-2 rounded font-semibold hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    >
+                      {uploading ? 'Uploading...' : 'Upload Image'}
+                    </button>
+
+                    {uploadedUrls.length > 0 && (
+                      <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded">
+                        <p className="text-sm text-green-800">Image uploaded successfully!</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Video Upload Section */}
+                <div className="mb-6 p-4 bg-blue-50 rounded">
+                  <h4 className="font-medium mb-2">Product Video (Optional)</h4>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Select Videos (Multiple allowed)
+                      </label>
+                      <input
+                        type="file"
+                        accept="video/*"
+                        multiple
+                        onChange={handleVideoFileSelect}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600"
+                      />
+                    </div>
+
+                    {selectedVideoFiles.length > 0 && (
+                      <div className="text-sm text-gray-600">
+                        Selected: {selectedVideoFiles.length} video{selectedVideoFiles.length > 1 ? 's' : ''} - {selectedVideoFiles.map(f => f.name).join(', ')}
+                      </div>
+                    )}
+
+                    {videoPreviewUrls.length > 0 && (
+                      <div className="mt-4">
+                        <h5 className="text-sm font-medium text-gray-700 mb-2">Video Preview:</h5>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {videoPreviewUrls.map((url, index) => (
+                            <video
+                              key={index}
+                              src={url}
+                              controls
+                              className="max-w-full h-32 object-contain border border-gray-300 rounded"
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleUploadVideos}
+                      disabled={selectedVideoFiles.length === 0 || uploadingVideos}
+                      className="bg-blue-600 text-white px-4 py-2 rounded font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    >
+                      {uploadingVideos ? 'Uploading Videos...' : 'Upload Videos'}
+                    </button>
+
+                    {uploadedVideoUrls.length > 0 && (
+                      <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded">
+                        <p className="text-sm text-green-800">Videos uploaded successfully!</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Product Form */}
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Product Name *
+                    </label>
+                    <input
+                      type="text"
+                      value={productForm.name}
+                      onChange={(e) => setProductForm({...productForm, name: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                      placeholder="Enter product name"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Description
+                    </label>
+                    <textarea
+                      value={productForm.description}
+                      onChange={(e) => setProductForm({...productForm, description: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                      rows={3}
+                      placeholder="Enter product description"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Price *
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={productForm.price}
+                        onChange={(e) => setProductForm({...productForm, price: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                        placeholder="0.00"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Stock Quantity *
+                      </label>
+                      <input
+                        type="number"
+                        value={productForm.stock_quantity}
+                        onChange={(e) => setProductForm({...productForm, stock_quantity: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                        placeholder="0"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Category
+                    </label>
+                    <select
+                      value={productForm.category_id}
+                      onChange={(e) => setProductForm({...productForm, category_id: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                    >
+                      <option value="1">T-Shirts</option>
+                      <option value="2">Jeans</option>
+                      <option value="3">Dresses</option>
+                      <option value="4">Jackets</option>
+                      <option value="5">Shoes</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Sizes (JSON format)
+                    </label>
+                    <input
+                      type="text"
+                      value={productForm.sizes}
+                      onChange={(e) => setProductForm({...productForm, sizes: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                      placeholder='["S","M","L","XL"]'
+                    />
+                  </div>
+
+                  {/* Sale Fields */}
+                  <div className="space-y-4 p-4 bg-yellow-50 border border-yellow-200 rounded">
+                    <h4 className="font-medium text-gray-900">Sale Information</h4>
+
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        id="is_on_sale"
+                        checked={productForm.is_on_sale}
+                        onChange={(e) => setProductForm({...productForm, is_on_sale: e.target.checked})}
+                        className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                      />
+                      <label htmlFor="is_on_sale" className="ml-2 block text-sm text-gray-900">
+                        Is on sale
+                      </label>
+                    </div>
+
+                    {productForm.is_on_sale && (
+                      <>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Sale Price
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={productForm.sale_price}
+                              onChange={(e) => setProductForm({...productForm, sale_price: e.target.value})}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                              placeholder="0.00"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Sale Percentage (%)
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={productForm.sale_percentage}
+                              onChange={(e) => setProductForm({...productForm, sale_percentage: e.target.value})}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                              placeholder="20.00"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Sale Start Date
+                            </label>
+                            <input
+                              type="datetime-local"
+                              value={productForm.sale_start_date}
+                              onChange={(e) => setProductForm({...productForm, sale_start_date: e.target.value})}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Sale End Date
+                            </label>
+                            <input
+                              type="datetime-local"
+                              value={productForm.sale_end_date}
+                              onChange={(e) => setProductForm({...productForm, sale_end_date: e.target.value})}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                            />
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="flex gap-4">
+                    <button
+                      onClick={editingProduct ? handleUpdateProduct : handleCreateProduct}
+                      disabled={creatingProduct || uploadedUrls.length === 0}
+                      className="bg-green-600 text-white px-4 py-2 rounded font-semibold hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    >
+                      {creatingProduct ? 'Saving...' : editingProduct ? 'Update Product' : 'Create Product'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowProductForm(false);
+                        setEditingProduct(null);
+                        setProductForm({
+                          name: '',
+                          description: '',
+                          price: '',
+                          category_id: '1',
+                          stock_quantity: '',
+                          sizes: '["S","M","L","XL"]',
+                          is_on_sale: false,
+                          sale_price: '',
+                          sale_percentage: '',
+                          sale_start_date: '',
+                          sale_end_date: '',
+                          video_url: ''
+                        });
+                        setUploadedUrls([]);
+                      }}
+                      className="bg-gray-600 text-white px-4 py-2 rounded font-semibold hover:bg-gray-700"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+
+                {message && (
+                  <div className={`mt-4 p-4 rounded ${message.includes('successfully') ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
+                    {message}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {loadingProducts ? (
+              <div className="text-center py-8">Loading products...</div>
+            ) : (
+              <div className="bg-white rounded-lg shadow overflow-hidden">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Image</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {products.map((product) => (
+                      <tr key={product.id}>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {product.image_url && product.image_url.trim() !== '' ? (
+                            <Image
+                              src={product.image_url}
+                              alt={product.name}
+                              width={50}
+                              height={50}
+                              className="rounded"
+                            />
+                          ) : (
+                            <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center text-xs text-gray-500">
+                              No Image
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{product.name}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">EGP {product.price.toFixed(2)}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.stock_quantity}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">Category {product.category_id}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                          <button
+                            onClick={() => editProduct(product)}
+                            className="text-blue-600 hover:text-blue-900"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => deleteProduct(product.id)}
+                            className="text-red-600 hover:text-red-900"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

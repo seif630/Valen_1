@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "@sendgrid/mail": "^8.1.5",
+    "nodemailer": "^7.0.6"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^7.0.1"
+  }
+}
